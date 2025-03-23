@@ -178,7 +178,7 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
     }
   }, [apiCallCount]);
 
-  const handleSend = () => {
+  const handleSend = async () => {
     if (!input.trim()) return;
 
     // Hide onboarding after first message
@@ -201,38 +201,37 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
     // Increment API call counter
     setApiCallCount(prev => prev + 1);
 
-    // Simulate API call with 2% chance of error for testing error handling
-    const hasError = Math.random() < 0.02;
+    try {
+      // Simulate a small delay for better UX
+      await new Promise(resolve => setTimeout(resolve, 500));
 
-    // Simulate AI response after a delay
-    setTimeout(() => {
-      if (hasError) {
-        handleError("Sorry, I encountered an issue processing your request. Let me try again.");
-      } else {
-        const response = getAIResponse(input.trim());
+      // Get AI response from our backend API
+      const response = await getAIResponse(input.trim());
 
-        // Check if response should include an interactive element
-        const shouldIncludeAction = detectActionIntent(input.trim());
+      // Check if response should include an interactive element
+      const shouldIncludeAction = detectActionIntent(input.trim());
 
-        const aiResponse: Message = {
-          id: (Date.now() + 1).toString(),
-          content: response.message,
-          role: 'assistant',
-          timestamp: new Date(),
-          hasAction: shouldIncludeAction,
-          actionType: response.actionType
-        };
+      const aiResponse: Message = {
+        id: (Date.now() + 1).toString(),
+        content: response.message,
+        role: 'assistant',
+        timestamp: new Date(),
+        hasAction: shouldIncludeAction,
+        actionType: response.actionType
+      };
 
-        setMessages(prev => [...prev, aiResponse]);
+      setMessages(prev => [...prev, aiResponse]);
 
-        // If action detected, activate the appropriate calculator or tool
-        if (shouldIncludeAction && response.actionType) {
-          setActiveCalculator(response.actionType);
-        }
+      // If action detected, activate the appropriate calculator or tool
+      if (shouldIncludeAction && response.actionType) {
+        setActiveCalculator(response.actionType);
       }
-
+    } catch (error) {
+      console.error("Error in AI response:", error);
+      handleError("Sorry, I encountered an issue processing your request. Let me try again.");
+    } finally {
       setIsThinking(false);
-    }, 1500);
+    }
   };
 
   // Handle API errors gracefully
@@ -277,51 +276,222 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
            budgetKeywords.some(keyword => lowerQuery.includes(keyword));
   };
 
-  // Enhanced AI response function with context awareness
-  const getAIResponse = (query: string): { message: string, actionType?: 'calculator' | 'investment' | 'savings' | 'budget' } => {
+  // Enhanced AI response function with context awareness and API integration
+  const getAIResponse = async (query: string): Promise<{ message: string, actionType?: 'calculator' | 'investment' | 'savings' | 'budget' }> => {
     const lowerQuery = query.toLowerCase();
 
     // Personalize responses using user profile data
     const { name, monthlyIncome, monthlySavings, savingsGoal, riskTolerance, investmentAllocation, expenses } = userProfile;
 
-    // Calculate some useful financial metrics for personalized responses
-    const savingsRate = (monthlySavings / monthlyIncome) * 100;
-    const monthsToGoal = savingsGoal / monthlySavings;
-    const totalExpenses = Object.values(expenses).reduce((sum, expense) => sum + expense, 0);
-    const discretionarySpending = expenses.entertainment + expenses.other;
+    try {
+      if (lowerQuery.includes('savings') || lowerQuery.includes('save')) {
+        // Call savings API
+        const response = await fetch('/api/savings', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            currentSavings: monthlySavings * 6, // Assuming they have 6 months of savings already
+            monthlySavings: monthlySavings,
+            savingsGoal: savingsGoal,
+            interestRate: 4 // Assuming 4% interest rate
+          }),
+        });
 
-    if (lowerQuery.includes('savings') || lowerQuery.includes('save')) {
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            const timeToGoal = data.data.timeToGoal;
+            const recommendations = data.data.recommendations.join('\n\n');
+
+            return {
+              message: `Based on your profile ${name}, you're currently saving ₹${monthlySavings} per month. At this rate, you'll reach your savings goal of ₹${savingsGoal} in approximately ${Math.ceil(timeToGoal)} months.\n\n${recommendations}\n\nWould you like me to create a detailed savings plan?`,
+              actionType: 'savings'
+            };
+          }
+        }
+
+        // Fallback if API fails
+        const savingsRate = (monthlySavings / monthlyIncome) * 100;
+        const monthsToGoal = savingsGoal / monthlySavings;
+        const discretionarySpending = expenses.entertainment + expenses.other;
+
+        return {
+          message: `Based on your profile ${name}, you're currently saving ₹${monthlySavings} per month (${savingsRate.toFixed(1)}% of your income). At this rate, you'll reach your savings goal of ₹${savingsGoal} in approximately ${Math.ceil(monthsToGoal)} months.\n\nI notice you're spending ₹${discretionarySpending} on discretionary items. Reducing this by 20% would allow you to save an additional ₹${Math.round(discretionarySpending * 0.2)} per month, helping you reach your goal ${Math.ceil(monthsToGoal * 0.8)} months sooner. Would you like me to create a detailed savings plan?`,
+          actionType: 'savings'
+        };
+      } else if (lowerQuery.includes('spending') || lowerQuery.includes('expenses')) {
+        // Call expenses API
+        const expenseArray = Object.entries(expenses).map(([category, amount]) => ({
+          category,
+          amount,
+          date: new Date().toISOString().split('T')[0],
+          description: `Monthly ${category} expense`
+        }));
+
+        const response = await fetch('/api/expenses', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            expenses: expenseArray,
+            monthlyIncome: monthlyIncome,
+            budgetLimits: {
+              housing: monthlyIncome * 0.3,
+              food: monthlyIncome * 0.15,
+              entertainment: monthlyIncome * 0.1
+            }
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            const categoryPercentages = data.data.categoryPercentages;
+            const recommendations = data.data.recommendations.join('\n\n');
+            const totalExpenses = data.data.totalExpenses;
+
+            let expenseBreakdown = '';
+            Object.entries(expenses).forEach(([category, amount]) => {
+              const percentage = categoryPercentages[category.toLowerCase()] ||
+                ((amount / totalExpenses) * 100).toFixed(1);
+              expenseBreakdown += `• ${category.charAt(0).toUpperCase() + category.slice(1)}: ₹${amount} (${percentage}%)\n`;
+            });
+
+            return {
+              message: `Here's a breakdown of your monthly expenses:\n\n${expenseBreakdown}\n${recommendations}\n\nWould you like to see a visualization of your spending patterns?`,
+              actionType: 'budget'
+            };
+          }
+        }
+
+        // Fallback if API fails
+        const totalExpenses = Object.values(expenses).reduce((sum, expense) => sum + expense, 0);
+
+        return {
+          message: `Here's a breakdown of your monthly expenses:\n\n• Housing: ₹${expenses.housing} (${((expenses.housing/totalExpenses)*100).toFixed(1)}%)\n• Food: ₹${expenses.food} (${((expenses.food/totalExpenses)*100).toFixed(1)}%)\n• Transportation: ₹${expenses.transportation} (${((expenses.transportation/totalExpenses)*100).toFixed(1)}%)\n• Entertainment: ₹${expenses.entertainment} (${((expenses.entertainment/totalExpenses)*100).toFixed(1)}%)\n• Utilities: ₹${expenses.utilities} (${((expenses.utilities/totalExpenses)*100).toFixed(1)}%)\n• Other: ₹${expenses.other} (${((expenses.other/totalExpenses)*100).toFixed(1)}%)\n\nYour entertainment expenses are ${expenses.entertainment > 300 ? 'higher' : 'lower'} than the average for your income level. Would you like to see a visualization of your spending patterns?`,
+          actionType: 'budget'
+        };
+      } else if (lowerQuery.includes('investment') || lowerQuery.includes('invest') || lowerQuery.includes('portfolio')) {
+        // Call investments API
+        const response = await fetch('/api/investments', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            initialInvestment: monthlySavings * 12, // Assuming 1 year of savings as initial investment
+            monthlyContribution: monthlySavings * 0.5, // Half of monthly savings goes to investments
+            years: 10, // 10-year projection
+            riskProfile: riskTolerance,
+            allocation: investmentAllocation
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            const projectedValue = data.data.projectedValue;
+            const totalContributions = data.data.totalContributions;
+            const growth = data.data.totalGrowth;
+            const recommendations = data.data.recommendations.join('\n\n');
+
+            return {
+              message: `Your current investment allocation is:\n\n• Stocks: ${investmentAllocation.stocks}%\n• Bonds: ${investmentAllocation.bonds}%\n• Real Estate: ${investmentAllocation.realEstate}%\n• Cash: ${investmentAllocation.cash}%\n\nWith this allocation and your ${riskTolerance} risk profile, your projected 10-year investment value is ₹${projectedValue.toLocaleString()}, with ₹${growth.toLocaleString()} in growth.\n\n${recommendations}\n\nWould you like to see a simulation of how different allocations might perform over time?`,
+              actionType: 'investment'
+            };
+          }
+        }
+
+        // Fallback if API fails
+        return {
+          message: `Your current investment allocation is:\n\n• Stocks: ${investmentAllocation.stocks}%\n• Bonds: ${investmentAllocation.bonds}%\n• Real Estate: ${investmentAllocation.realEstate}%\n• Cash: ${investmentAllocation.cash}%\n\nBased on your ${riskTolerance} risk tolerance and financial goals, I recommend ${riskTolerance === 'high' ? 'increasing your stock allocation to 70%' : riskTolerance === 'medium' ? 'maintaining a balanced portfolio' : 'increasing your bond allocation for more stability'}. Would you like to see a simulation of how different allocations might perform over time?`,
+          actionType: 'investment'
+        };
+      } else if (lowerQuery.includes('mortgage') || lowerQuery.includes('loan') || lowerQuery.includes('calculator')) {
+        // Call loans API
+        const response = await fetch('/api/loans', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            loanAmount: calculatorData.loanAmount,
+            interestRate: calculatorData.interestRate,
+            loanTerm: calculatorData.loanTerm,
+            loanType: 'mortgage',
+            extraPayment: 1000 // Example extra payment for recommendations
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            const monthlyPayment = data.data.monthlyPayment;
+            const totalInterest = data.data.totalInterest;
+            const recommendations = data.data.recommendations.join('\n\n');
+
+            return {
+              message: `I can help you calculate loan payments and amortization schedules. For a mortgage of ₹${calculatorData.loanAmount.toLocaleString()} at ${calculatorData.interestRate}% interest over ${calculatorData.loanTerm} years, your monthly payment would be approximately ₹${monthlyPayment.toLocaleString()}.\n\nOver the life of the loan, you'll pay ₹${totalInterest.toLocaleString()} in interest.\n\n${recommendations}\n\nWould you like to adjust these parameters or see a detailed breakdown?`,
+              actionType: 'calculator'
+            };
+          }
+        }
+
+        // Fallback if API fails
+        return {
+          message: `I can help you calculate loan payments and amortization schedules. For a mortgage of ₹${calculatorData.loanAmount.toLocaleString()} at ${calculatorData.interestRate}% interest over ${calculatorData.loanTerm} years, your monthly payment would be approximately ₹${calculatorData.monthlyPayment.toLocaleString()}. Would you like to adjust these parameters or see a detailed breakdown?`,
+          actionType: 'calculator'
+        };
+      } else if (lowerQuery.includes('budget') || lowerQuery.includes('plan')) {
+        // Call budget API
+        const response = await fetch('/api/budget', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            monthlyIncome: monthlyIncome
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            const allocations = data.data;
+
+            return {
+              message: `Based on your monthly income of ₹${monthlyIncome.toLocaleString()}, I recommend the following budget allocation:\n\n• Housing: ₹${allocations.housing.toLocaleString()} (${((allocations.housing/monthlyIncome)*100).toFixed(0)}%)\n• Savings: ₹${allocations.savings.toLocaleString()} (${((allocations.savings/monthlyIncome)*100).toFixed(0)}%)\n• Food: ₹${allocations.food.toLocaleString()} (${((allocations.food/monthlyIncome)*100).toFixed(0)}%)\n• Transportation: ₹${allocations.transportation.toLocaleString()} (${((allocations.transportation/monthlyIncome)*100).toFixed(0)}%)\n• Entertainment: ₹${allocations.entertainment.toLocaleString()} (${((allocations.entertainment/monthlyIncome)*100).toFixed(0)}%)\n• Utilities: ₹${allocations.utilities.toLocaleString()} (${((allocations.utilities/monthlyIncome)*100).toFixed(0)}%)\n• Insurance: ₹${allocations.insurance.toLocaleString()} (${((allocations.insurance/monthlyIncome)*100).toFixed(0)}%)\n• Miscellaneous: ₹${allocations.miscellaneous.toLocaleString()} (${((allocations.miscellaneous/monthlyIncome)*100).toFixed(0)}%)\n\nWould you like me to create a customized budget plan based on your specific needs?`,
+              actionType: 'budget'
+            };
+          }
+        }
+
+        // Fallback if API fails
+        return {
+          message: `Based on your monthly income of ₹${monthlyIncome.toLocaleString()}, I recommend the following budget allocation:\n\n• Housing: ₹${Math.round(monthlyIncome * 0.3).toLocaleString()} (30%)\n• Savings: ₹${Math.round(monthlyIncome * 0.2).toLocaleString()} (20%)\n• Food: ₹${Math.round(monthlyIncome * 0.15).toLocaleString()} (15%)\n• Transportation: ₹${Math.round(monthlyIncome * 0.1).toLocaleString()} (10%)\n• Entertainment: ₹${Math.round(monthlyIncome * 0.1).toLocaleString()} (10%)\n• Utilities: ₹${Math.round(monthlyIncome * 0.05).toLocaleString()} (5%)\n• Insurance: ₹${Math.round(monthlyIncome * 0.05).toLocaleString()} (5%)\n• Miscellaneous: ₹${Math.round(monthlyIncome * 0.05).toLocaleString()} (5%)\n\nWould you like me to create a customized budget plan based on your specific needs?`,
+          actionType: 'budget'
+        };
+      } else if (lowerQuery.includes('profile') || lowerQuery.includes('my information')) {
+        // Calculate savings rate
+        const savingsRate = (monthlySavings / monthlyIncome) * 100;
+
+        return {
+          message: `Here's your financial profile, ${name}:\n\n• Monthly Income: ₹${monthlyIncome.toLocaleString()}\n• Monthly Savings: ₹${monthlySavings.toLocaleString()} (${savingsRate.toFixed(1)}% of income)\n• Savings Goal: ₹${savingsGoal.toLocaleString()}\n• Risk Tolerance: ${riskTolerance.charAt(0).toUpperCase() + riskTolerance.slice(1)}\n\nYou've earned ${userProfile.points} points and unlocked ${userProfile.achievements.length} achievements so far. Is there anything specific about your profile you'd like to update?`
+        };
+      } else {
+        return {
+          message: `I understand you're asking about "${query}". To provide the most accurate financial advice, I'll need to consider your specific situation.\n\nBased on your profile, you have a monthly income of ₹${monthlyIncome.toLocaleString()}, save ₹${monthlySavings.toLocaleString()} monthly, and have a ${riskTolerance} risk tolerance. Could you provide more specific details about your question so I can give you personalized advice?`
+        };
+      }
+    } catch (error) {
+      console.error("Error in AI response generation:", error);
+
+      // Fallback response if any API calls fail
       return {
-        message: `Based on your profile ${name}, you're currently saving ₹${monthlySavings} per month (${savingsRate.toFixed(1)}% of your income). At this rate, you'll reach your savings goal of ₹${savingsGoal} in approximately ${Math.ceil(monthsToGoal)} months.\n\nI notice you're spending ₹${discretionarySpending} on discretionary items. Reducing this by 20% would allow you to save an additional ₹${Math.round(discretionarySpending * 0.2)} per month, helping you reach your goal ${Math.ceil(monthsToGoal * 0.8)} months sooner. Would you like me to create a detailed savings plan?`,
-        actionType: 'savings'
-      };
-    } else if (lowerQuery.includes('spending') || lowerQuery.includes('expenses')) {
-      return {
-        message: `Here's a breakdown of your monthly expenses:\n\n• Housing: ₹${expenses.housing} (${((expenses.housing/totalExpenses)*100).toFixed(1)}%)\n• Food: ₹${expenses.food} (${((expenses.food/totalExpenses)*100).toFixed(1)}%)\n• Transportation: ₹${expenses.transportation} (${((expenses.transportation/totalExpenses)*100).toFixed(1)}%)\n• Entertainment: ₹${expenses.entertainment} (${((expenses.entertainment/totalExpenses)*100).toFixed(1)}%)\n• Utilities: ₹${expenses.utilities} (${((expenses.utilities/totalExpenses)*100).toFixed(1)}%)\n• Other: ₹${expenses.other} (${((expenses.other/totalExpenses)*100).toFixed(1)}%)\n\nYour entertainment expenses are ${expenses.entertainment > 300 ? 'higher' : 'lower'} than the average for your income level. Would you like to see a visualization of your spending patterns?`,
-        actionType: 'budget'
-      };
-    } else if (lowerQuery.includes('investment') || lowerQuery.includes('invest') || lowerQuery.includes('portfolio')) {
-      return {
-        message: `Your current investment allocation is:\n\n• Stocks: ${investmentAllocation.stocks}%\n• Bonds: ${investmentAllocation.bonds}%\n• Real Estate: ${investmentAllocation.realEstate}%\n• Cash: ${investmentAllocation.cash}%\n\nBased on your ${riskTolerance} risk tolerance and financial goals, I recommend ${riskTolerance === 'high' ? 'increasing your stock allocation to 70%' : riskTolerance === 'medium' ? 'maintaining a balanced portfolio' : 'increasing your bond allocation for more stability'}. Would you like to see a simulation of how different allocations might perform over time?`,
-        actionType: 'investment'
-      };
-    } else if (lowerQuery.includes('mortgage') || lowerQuery.includes('loan') || lowerQuery.includes('calculator')) {
-      return {
-        message: `I can help you calculate loan payments and amortization schedules. For a mortgage of ₹${calculatorData.loanAmount} at ${calculatorData.interestRate}% interest over ${calculatorData.loanTerm} years, your monthly payment would be approximately ₹${calculatorData.monthlyPayment}. Would you like to adjust these parameters or see a detailed breakdown?`,
-        actionType: 'calculator'
-      };
-    } else if (lowerQuery.includes('budget') || lowerQuery.includes('plan')) {
-      return {
-        message: `Based on your monthly income of ₹${monthlyIncome}, I recommend the following budget allocation:\n\n• Housing: ₹${Math.round(monthlyIncome * 0.3)} (30%)\n• Savings: ₹${Math.round(monthlyIncome * 0.2)} (20%)\n• Food: ₹${Math.round(monthlyIncome * 0.15)} (15%)\n• Transportation: ₹${Math.round(monthlyIncome * 0.1)} (10%)\n• Entertainment: ₹${Math.round(monthlyIncome * 0.1)} (10%)\n• Utilities: ₹${Math.round(monthlyIncome * 0.05)} (5%)\n• Insurance: ₹${Math.round(monthlyIncome * 0.05)} (5%)\n• Miscellaneous: ₹${Math.round(monthlyIncome * 0.05)} (5%)\n\nWould you like me to create a customized budget plan based on your specific needs?`,
-        actionType: 'budget'
-      };
-    } else if (lowerQuery.includes('profile') || lowerQuery.includes('my information')) {
-      return {
-        message: `Here's your financial profile, ${name}:\n\n• Monthly Income: ₹${monthlyIncome}\n• Monthly Savings: ₹${monthlySavings} (${savingsRate.toFixed(1)}% of income)\n• Savings Goal: ₹${savingsGoal}\n• Risk Tolerance: ${riskTolerance.charAt(0).toUpperCase() + riskTolerance.slice(1)}\n\nYou've earned ${userProfile.points} points and unlocked ${userProfile.achievements.length} achievements so far. Is there anything specific about your profile you'd like to update?`
-      };
-    } else {
-      return {
-        message: `I understand you're asking about "${query}". To provide the most accurate financial advice, I'll need to consider your specific situation.\n\nBased on your profile, you have a monthly income of ₹${monthlyIncome}, save ₹${monthlySavings} monthly, and have a ${riskTolerance} risk tolerance. Could you provide more specific details about your question so I can give you personalized advice?`
+        message: `I understand you're asking about "${query}". To provide the most accurate financial advice, I'll need to consider your specific situation.\n\nBased on your profile, you have a monthly income of ₹${monthlyIncome.toLocaleString()}, save ₹${monthlySavings.toLocaleString()} monthly, and have a ${riskTolerance} risk tolerance. Could you provide more specific details about your question so I can give you personalized advice?`
       };
     }
   };
@@ -335,7 +505,8 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
 
   const handleSuggestionClick = (suggestion: string) => {
     setInput(suggestion);
-    handleSend();
+    // Use setTimeout to ensure the input state is updated before sending
+    setTimeout(() => handleSend(), 0);
   };
 
   // Reset active calculator
@@ -343,8 +514,8 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
     setActiveCalculator(null);
   };
 
-  // Update calculator data
-  const updateCalculatorData = (field: string, value: number) => {
+  // Update calculator data using API
+  const updateCalculatorData = async (field: string, value: number) => {
     setCalculatorData(prev => ({
       ...prev,
       [field]: value
@@ -352,17 +523,51 @@ export function AIAssistant({ onClose }: { onClose: () => void }) {
 
     // Recalculate mortgage payment if relevant fields changed
     if (['loanAmount', 'interestRate', 'loanTerm'].includes(field)) {
-      const P = calculatorData.loanAmount;
-      const r = calculatorData.interestRate / 100 / 12;
-      const n = calculatorData.loanTerm * 12;
+      try {
+        // Use updated values but fall back to current state if not changed
+        const updatedData = {
+          ...calculatorData,
+          [field]: value
+        };
 
-      // Monthly payment formula: P * (r * (1 + r)^n) / ((1 + r)^n - 1)
-      const monthlyPayment = P * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+        const response = await fetch('/api/loans', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            loanAmount: updatedData.loanAmount,
+            interestRate: updatedData.interestRate,
+            loanTerm: updatedData.loanTerm,
+            loanType: 'mortgage'
+          }),
+        });
 
-      setCalculatorData(prev => ({
-        ...prev,
-        monthlyPayment: parseFloat(monthlyPayment.toFixed(2))
-      }));
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            setCalculatorData(prev => ({
+              ...prev,
+              monthlyPayment: data.data.monthlyPayment
+            }));
+          }
+        }
+      } catch (error) {
+        console.error("Error calculating loan payment:", error);
+
+        // Fallback to client-side calculation if API fails
+        const P = calculatorData.loanAmount;
+        const r = calculatorData.interestRate / 100 / 12;
+        const n = calculatorData.loanTerm * 12;
+
+        // Monthly payment formula: P * (r * (1 + r)^n) / ((1 + r)^n - 1)
+        const monthlyPayment = P * (r * Math.pow(1 + r, n)) / (Math.pow(1 + r, n) - 1);
+
+        setCalculatorData(prev => ({
+          ...prev,
+          monthlyPayment: parseFloat(monthlyPayment.toFixed(2))
+        }));
+      }
     }
   };
 
