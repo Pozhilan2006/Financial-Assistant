@@ -37,7 +37,20 @@ export function MainDashboard() {
         variants={listItem}
         className="flex flex-col space-y-2"
       >
-        <h2 className="text-3xl font-bold tracking-tight text-gradient animate-gradient">Financial Dashboard</h2>
+        <motion.h2
+          className="text-3xl font-bold tracking-tight text-gradient"
+          style={{ backgroundSize: "200% 200%" }}
+          animate={{
+            backgroundPosition: ["0% 50%", "100% 50%", "0% 50%"]
+          }}
+          transition={{
+            duration: 8,
+            repeat: Infinity,
+            ease: "linear"
+          }}
+        >
+          Financial Dashboard
+        </motion.h2>
         <p className="text-muted-foreground">
           Your personalized financial overview and market insights.
         </p>
